@@ -81,23 +81,40 @@
             button.style.zIndex = '999';
             button.textContent = 'ENTER VR';
             
-            button.onclick = function() {
-                if (navigator.xr) {
-                    navigator.xr.isSessionSupported('immersive-vr').then((supported) => {
-                        if (supported) {
-                            renderer.xr.getSession() ? 
-                                renderer.xr.getSession().end() : 
-                                navigator.xr.requestSession('immersive-vr').then((session) => {
-                                    renderer.xr.setSession(session);
-                                });
-                        } else {
-                            button.textContent = 'VR NOT SUPPORTED';
-                            button.style.background = '#666';
-                        }
-                    });
-                } else {
+            button.onclick = async function() {
+                if (!navigator.xr) {
                     button.textContent = 'WEBXR NOT AVAILABLE';
                     button.style.background = '#666';
+                    return;
+                }
+                
+                try {
+                    const supported = await navigator.xr.isSessionSupported('immersive-vr');
+                    if (!supported) {
+                        button.textContent = 'VR NOT SUPPORTED';
+                        button.style.background = '#666';
+                        return;
+                    }
+                    
+                    const currentSession = renderer.xr.getSession();
+                    if (currentSession) {
+                        await currentSession.end();
+                        button.textContent = 'ENTER VR';
+                    } else {
+                        const session = await navigator.xr.requestSession('immersive-vr', {
+                            optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking']
+                        });
+                        await renderer.xr.setSession(session);
+                        button.textContent = 'EXIT VR';
+                        
+                        session.addEventListener('end', () => {
+                            button.textContent = 'ENTER VR';
+                        });
+                    }
+                } catch (error) {
+                    console.error('VR Error:', error);
+                    button.textContent = 'VR ERROR';
+                    button.style.background = '#ff4444';
                 }
             };
             
@@ -236,6 +253,19 @@
         // VR controllers setup
         const controller1 = renderer.xr.getController(0);
         const controller2 = renderer.xr.getController(1);
+        
+        // Add visual representation for controllers
+        const controllerGeometry = new THREE.CylinderGeometry(0.01, 0.02, 0.1, 8);
+        const controllerMaterial = new THREE.MeshStandardMaterial({ color: 0x00ff00 });
+        
+        const controllerMesh1 = new THREE.Mesh(controllerGeometry, controllerMaterial);
+        const controllerMesh2 = new THREE.Mesh(controllerGeometry, controllerMaterial);
+        controllerMesh1.rotation.x = -Math.PI / 2;
+        controllerMesh2.rotation.x = -Math.PI / 2;
+        
+        controller1.add(controllerMesh1);
+        controller2.add(controllerMesh2);
+        
         scene.add(controller1);
         scene.add(controller2);
         
@@ -243,15 +273,27 @@
         const tempMatrix = new THREE.Matrix4();
         const raycaster = new THREE.Raycaster();
         
+        let moveDirection = new THREE.Vector3();
+        
         controller1.addEventListener('selectstart', onSelectStart);
         controller2.addEventListener('selectstart', onSelectStart);
+        
+        controller1.addEventListener('connected', (event) => {
+            console.log('Controller 1 connected:', event.data.handedness);
+        });
+        
+        controller2.addEventListener('connected', (event) => {
+            console.log('Controller 2 connected:', event.data.handedness);
+        });
         
         function onSelectStart(event) {
             const controller = event.target;
             tempMatrix.identity().extractRotation(controller.matrixWorld);
             raycaster.ray.origin.setFromMatrixPosition(controller.matrixWorld);
             raycaster.ray.direction.set(0, 0, -1).applyMatrix4(tempMatrix);
-            // VR teleport or interaction logic can be added here
+            
+            // Simple VR locomotion - move in the direction controller is pointing
+            moveDirection.set(0, 0, -0.5).applyMatrix4(tempMatrix);
         }
         
         document.addEventListener('keydown', (e) => keys[e.key.toLowerCase()] = true);
@@ -283,8 +325,19 @@
         renderer.setAnimationLoop(animate);
         
         function animate() {
-            // Movement (desktop controls)
-            if (!renderer.xr.isPresenting) {
+            // VR locomotion when in VR mode
+            if (renderer.xr.isPresenting) {
+                const session = renderer.xr.getSession();
+                if (session) {
+                    // Simple movement in VR - apply moveDirection
+                    const cameraGroup = renderer.xr.getCamera(camera);
+                    if (moveDirection.length() > 0) {
+                        cameraGroup.position.add(moveDirection);
+                        moveDirection.multiplyScalar(0.9); // Decay movement
+                    }
+                }
+            } else {
+                // Desktop controls (only when not in VR)
                 const direction = new THREE.Vector3();
                 const forward = new THREE.Vector3();
                 const right = new THREE.Vector3();
